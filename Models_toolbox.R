@@ -1,3 +1,4 @@
+library(gtools)
 
 # This function splits the data into train / test at proportion 'prop' and balanced on a label 'balance'
 get_train_rows <- function(data, prop = 0.8, balance =as.character(NA)) {
@@ -105,5 +106,62 @@ get_mc_stan_accuracy <- function(nb_iter, data, weight = NA) {
     res <- res %>% rbind(get_stan_test_accuracy(data, weight))
   }
   return(res %>% group_by(Metric) %>% dplyr::summarise(mean = mean(Value), var = var(Value), sd = sd(Value)))
+}
+
+
+
+# This function return a results for logistic regression adjusted by all columns in 'corrected_for'
+get_compound_logistic_reg <- function(eset, condition, compound, corrected_for = c()) {
+  
+  set.seed(4569)
+  eset <- eset[eset@featureData$Compound == compound,]
+  
+  p_retain <- append(corrected_for, c("Sample", {{condition}}))
+  df <- as.data.frame(t(exprs(eset))) %>%
+    dplyr::rename(Area := {{compound}}) %>%
+    rownames_to_column(var = "Sample") %>%
+    left_join(pData(eset) %>% select(p_retain)) %>%
+    dplyr::rename(Condition := {{condition}}) %>% 
+    drop_na()
+  
+  df_z <- df %>% mutate_if(is.numeric, scale) %>%
+    mutate_if(is.character, factor)
+  
+  if(length(corrected_for) > 0)
+    fmla_t <- "Condition ~ 0 + Area"
+  else
+    fmla_t <- "Condition~Area"
+  for(c in corrected_for) {
+    fmla_t <- paste(fmla_t, "+", c, sep = " ")
+  }
+  fmla <- as.formula(fmla_t)
+  
+  logit_model<-glm(fmla,data=df_z,family=binomial(link='logit'))
+  if(logit_model$converged==T ) {
+    
+    if(length(corrected_for) > 0) {
+      or_res <- exp(coef(logit_model))[[1]]
+      ci_res <- exp(confint(logit_model))
+      ci_2_5 <- ci_res[1, '2.5 %']
+      ci_97_5 <- ci_res[1, '97.5 %']
+      
+      coefs <- coef(summary(logit_model))
+      p_value <- coefs[1,'Pr(>|z|)']
+      
+    }
+    else{
+      or_res <- exp(coef(logit_model))[[2]]
+      ci_res <- exp(confint(logit_model))
+      ci_2_5 <- ci_res[2, '2.5 %']
+      ci_97_5 <- ci_res[2, '97.5 %']
+      
+      coefs <- coef(summary(logit_model))
+      
+      if(nrow(coefs)==2)
+        p_value <- coefs[2,'Pr(>|z|)']
+    }
+    return (data.frame("Compound" = compound, "OR_97.5CI" = paste(format(or_res, digits = 2), " (", format(ci_2_5, digits = 2), "-", format(ci_97_5, digits = 2), ")", sep = ""), "P_value" =  stars.pval(p_value)))
+  }
+  return (data.frame("Compound" = compound, "OR(97.5%CI)" = 0, "P_value" =  0, "P_value val" = 0))
 }
 
