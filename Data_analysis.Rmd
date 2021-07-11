@@ -176,13 +176,13 @@ gridExtra::grid.arrange(p3_a, p4_a, nrow = 1, ncol=2, respect = T, padding = uni
 
 As normalization is time consuming activity I like to save the results so I can restart on later dates form here
 ```{r Save / Load normalized data sets}
-#save(eset_norm2_pos, file = "Data/Norm2_eset_pos.RData")
+save(eset_norm2_pos, file = "Data/Norm2_eset_pos.RData")
 
 load(file = "Data/Norm2_eset_pos.RData")
 ```
 
 ```{r Save / Load normalized data sets}
-#save(eset_norm2_neg, file = "Data/Norm2_eset_neg.RData")
+save(eset_norm2_neg, file = "Data/Norm2_eset_neg.RData")
 
 load(file = "Data/Norm2_eset_neg.RData")
 ```
@@ -745,6 +745,100 @@ roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F,
 
 sens.ci <- ci.se(roc1, specificities=seq(0, 100, 5))
 ```
+
+
+
+# Adjusted logistic regression
+
+```{r}
+getAdjustedLogistic <- function(data, df_comp, regress_by) {
+
+  data@phenoData$LiverD = case_when(
+    !is.na(data@phenoData$`Liver disease`) ~ T,
+    TRUE ~ F)
+
+  data@phenoData$CarD = case_when(
+    !is.na(data@phenoData$`Cardiac disease`) ~ T,
+    TRUE ~ F)
+
+  data@phenoData$HTND = case_when(
+    !is.na(data@phenoData$HTN) ~ T,
+    TRUE ~ F)
+
+  data@phenoData$KidneyD = case_when(
+    !is.na(data@phenoData$`CKD (stage)`) ~ T,
+    TRUE ~ F)
+
+  data@phenoData$DM = case_when(
+    !is.na(data@phenoData$`CKD (stage)`) ~ T,
+    TRUE ~ F)
+
+  no_ad_res <- data.frame()
+  age_res <- data.frame()
+  gender_res <- data.frame()
+  bmi_res <- data.frame()
+  liverD_res <- data.frame()
+  carD_res <- data.frame()
+  htn_res <- data.frame()
+  kidneyD_res <- data.frame()
+  DM1_res <- data.frame()
+  DM2_res <- data.frame()
+  DM_res <- data.frame()
+  #Mal_res <- data.frame()
+  all_res <- data.frame()
+
+  for(compound in df_comp$Compound) {
+    print(compound)
+    no_ad_res <- no_ad_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound))
+    age_res <- age_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "Age"))
+    gender_res <- gender_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "Sex"))
+    bmi_res <- bmi_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "BMI"))
+    liverD_res <- liverD_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "LiverD"))
+    carD_res <- carD_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "CarD"))
+    htn_res <- htn_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "HTND"))
+    kidneyD_res <- kidneyD_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "KidneyD"))
+    DM_res <- DM_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = "DM"))
+    all_res <- all_res %>% rbind(get_compound_logistic_reg(data, regress_by, compound, corrected_for = c("Age", "Sex", "BMI", "LiverD", "CarD", "HTND", "KidneyD", "DM")))
+  }
+
+  add_prefix <- function(p, s) {if_else(s != "Compound", glue("{p}{s}"), s)}
+
+  adjsuted_results <- df_comp %>%
+    left_join(no_ad_res %>% dplyr::rename_with(function(s)add_prefix("none_",s)), by ="Compound") %>%
+    left_join(age_res %>% dplyr::rename_with(function(s)add_prefix("age_",s)), by="Compound") %>%
+    left_join(gender_res %>% dplyr::rename_with(function(s)add_prefix("gender_",s)), by="Compound") %>%
+    left_join(bmi_res %>% dplyr::rename_with(function(s)add_prefix("bmi_",s)), by="Compound") %>%
+    left_join(liverD_res %>% dplyr::rename_with(function(s)add_prefix("liverD_",s)), by="Compound") %>%
+    left_join(carD_res %>% dplyr::rename_with(function(s)add_prefix("cardiacD_",s)), by="Compound") %>%
+    left_join(htn_res %>% dplyr::rename_with(function(s)add_prefix("HTN_",s)), by="Compound") %>%
+    left_join(kidneyD_res %>% dplyr::rename_with(function(s)add_prefix("kidneyD_",s)), by="Compound") %>%
+    left_join(DM_res %>% dplyr::rename_with(function(s)add_prefix("DM_",s)), by="Compound") %>%
+    left_join(all_res %>% dplyr::rename_with(function(s)add_prefix("all_", s)), by="Compound")
+
+  return(adjsuted_results)
+}
+```
+
+
+```{r}
+regress_by <- "Severe"
+#regress_by <- "Deceased"
+
+
+fd_pos <- fData(data_pos_filter[data_pos_filter@featureData$Compound %in% selection_pos,])
+df_comp_pos <- data.frame(Compound = fd_pos$Compound, Name = fd_pos$Name, Polarity = "ESI+")
+df_comp_pos %<>% left_join(volc_data_s_pos %>% select(Compound, Q_value, FoldChange))
+res_pos <- getAdjustedLogistic(data_pos_filter, df_comp_pos, regress_by)
+
+fd_neg <- fData(data_neg_filter[data_neg_filter@featureData$Compound %in% selection_neg,])
+df_comp_neg <- data.frame(Compound = fd_neg$Compound, Name = fd_neg$Name, Polarity = "ESI-")
+df_comp_neg %<>% left_join(volc_data_s_neg %>% select(Compound, Q_value, FoldChange))
+res_neg <- getAdjustedLogistic(data_neg_filter, df_comp_neg, regress_by)
+
+res <- res_pos %>% rbind(res_neg)
+res
+```
+
 
 
 
