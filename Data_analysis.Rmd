@@ -179,14 +179,132 @@ gridExtra::grid.arrange(p3_a, p4_a, nrow = 1, ncol=2, respect = T, padding = uni
 
 As normalization is time consuming activity I like to save the results so I can restart on later dates form here
 ```{r Save / Load normalized data sets}
-save(eset_norm2_pos, file = "Data/Norm2_eset_pos.RData")
+#save(eset_norm2_pos, file = "Data/Norm2_eset_pos.RData")
 
 load(file = "Data/Norm2_eset_pos.RData")
 ```
 
 ```{r Save / Load normalized data sets}
-save(eset_norm2_neg, file = "Data/Norm2_eset_neg.RData")
+#save(eset_norm2_neg, file = "Data/Norm2_eset_neg.RData")
 
 load(file = "Data/Norm2_eset_neg.RData")
 ```
+
+
+## Data filtering
+
+Remove all compounds where 20% of the QC were not detected and 75% of the samples were not detected
+Remove all compounds where Predicted composition failed
+```{r}
+#ESI+
+data_pos <- eset_norm2_pos %>% remove_compounds(c("QC"), 0.2) %>% remove_compounds(c("Sample"), 0.75)
+data_pos_filter <- data_pos[data_pos@featureData$Predicted_Composition == "Full match",]
+
+#ESI-
+data_neg <- eset_norm2_neg %>% remove_compounds(c("QC"), 0.2) %>% remove_compounds(c("Sample"), 0.75)
+data_neg_filter <- data_neg[data_neg@featureData$Predicted_Composition == "Full match",]
+```
+
+## Add Labels of interest
+We are adding here a logical version (for models) and character version (for visuals)
+```{r}
+#ESI+
+data_pos_filter@phenoData$Severe = case_when(
+  data_pos_filter@phenoData$Severity == "Mild" ~ F,
+  data_pos_filter@phenoData$Severity == "Int" ~ F,
+  data_pos_filter@phenoData$Severity == "Severe" ~ T,
+  TRUE ~ NA)
+
+data_pos_filter@phenoData$SevereL = case_when(
+  data_pos_filter@phenoData$Severity == "Mild" ~ "Mild",
+  data_pos_filter@phenoData$Severity == "Int" ~ "Mild",
+  data_pos_filter@phenoData$Severity == "Intermediate" ~ "Mild",
+  data_pos_filter@phenoData$Severity == "Severe" ~ "Severe",
+  TRUE ~ as.character(NA))
+
+data_pos_filter@phenoData$Deceased = case_when(
+  data_pos_filter@phenoData$Outcome == "Discharge" ~ F,
+  data_pos_filter@phenoData$Outcome == "Deceased" ~ T,
+  data_pos_filter@phenoData$Outcome == "Ongoing (COV2 negative, currently in neuro rehab)" ~ F,
+  TRUE ~ NA)
+
+data_pos_filter@phenoData$DeceasedL = case_when(
+  data_pos_filter@phenoData$Outcome == "Discharge" ~ "Discharged",
+  data_pos_filter@phenoData$Outcome == "Deceased" ~ "Deceased",
+  data_pos_filter@phenoData$Outcome == "Ongoing (COV2 negative, currently in neuro rehab)" ~ "Discharged",
+  TRUE ~ as.character(NA))
+
+#ESI-
+data_neg_filter@phenoData$Severe = case_when(
+  data_neg_filter@phenoData$Severity == "Mild" ~ F,
+  data_neg_filter@phenoData$Severity == "Int" ~ F,
+  data_neg_filter@phenoData$Severity == "Severe" ~ T,
+  TRUE ~ NA)
+
+data_neg_filter@phenoData$SevereL = case_when(
+  data_neg_filter@phenoData$Severity == "Mild" ~ "Mild",
+  data_neg_filter@phenoData$Severity == "Int" ~ "Mild",
+  data_neg_filter@phenoData$Severity == "Intermediate" ~ "Mild",
+  data_neg_filter@phenoData$Severity == "Severe" ~ "Severe",
+  TRUE ~ as.character(NA))
+
+data_neg_filter@phenoData$Deceased = case_when(
+  data_neg_filter@phenoData$Outcome == "Discharge" ~ F,
+  data_neg_filter@phenoData$Outcome == "Deceased" ~ T,
+  data_neg_filter@phenoData$Outcome == "Ongoing (COV2 negative, currently in neuro rehab)" ~ F,
+  TRUE ~ NA)
+
+data_neg_filter@phenoData$DeceasedL = case_when(
+  data_neg_filter@phenoData$Outcome == "Discharge" ~ "Discharged",
+  data_neg_filter@phenoData$Outcome == "Deceased" ~ "Deceased",
+  data_neg_filter@phenoData$Outcome == "Ongoing (COV2 negative, currently in neuro rehab)" ~ "Discharged",
+  TRUE ~ as.character(NA))
+
+```
+
+
+
+# Volcano plots
+First p-values (including  q-values) and fold change is calculated with Mann-Whitney than shown in a custom volcano plot
+
+```{r All by severity}
+source("Data_processing.R")
+source("Data_viz.R")
+
+#ESI+
+#Severity
+t_start <- Sys.time()
+volc_data_s_pos <- get_fold_pvalue_mw(data_pos_filter, "Severe")
+Sys.time() -  t_start   
+
+get_volcano_plot(volc_data_s_pos, add_lables = F, foldChange_lable_lim = 2.5, p_value_lable_lim = 0.05, use_q_value = T)
+
+#Outcome
+t_start <- Sys.time()
+volc_data_d_pos <- get_fold_pvalue_mw(data_pos_filter, "Deceased")
+Sys.time() - t_start   
+
+get_volcano_plot(volc_data_d_pos, add_lables = F, foldChange_lable_lim = 2.5, p_value_lable_lim = 0.05, use_q_value = T)
+
+#ESI-
+#Severity
+t_start <- Sys.time()
+volc_data_s_neg <- get_fold_pvalue_mw(data_neg_filter, "Severe")
+Sys.time() -  t_start   
+
+get_volcano_plot(volc_data_s_neg, add_lables = F, foldChange_lable_lim = 2.5, p_value_lable_lim = 0.05, use_q_value = T)
+
+#Outcome
+t_start <- Sys.time()
+volc_data_d_neg <- get_fold_pvalue_mw(data_neg_filter, "Deceased")
+Sys.time() - t_start   
+
+get_volcano_plot(volc_data_d_neg, add_lables = F, foldChange_lable_lim = 2.5, p_value_lable_lim = 0.05, use_q_value = T)
+
+```
+
+
+
+
+
 
