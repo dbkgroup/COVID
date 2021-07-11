@@ -1,5 +1,6 @@
 library(tidyverse)
 library(fANCOVA)
+library(qvalue)
 
 
 # This function plots the time drift normalization for a compound  
@@ -263,6 +264,102 @@ covid_normalize_between_batches <- function(eset) {
   
   eset2
 }
+
+# This function returns p_value (T-Test) and Fold change per compound
+get_fold_pvalue <- function(eset, by, paired = F, t.test_log = T) {
+  
+  eset2 <- eset[,eset@phenoData$Group == "Sample"]
+  volcData <- as.data.frame(t(exprs(eset2))) %>%
+    rownames_to_column(var = "Sample") %>%
+    left_join(pData(eset2) %>% select(c(Sample, {{by}}))) 
+  volcData %>%
+    filter(!is.na(pull(volcData, !!by))) 
+  
+  v_true <- volcData %>% filter(pull(volcData, !!by) == T) %>% select(-c(Sample, {{by}}))
+  v_false <- volcData %>% filter(pull(volcData, !!by) == F) %>% select(-c(Sample, {{by}}))
+  
+  v_true_m <- t(v_true %>% summarise_all(list(mean)))
+  v_false_m <- t(v_false %>% summarise_all(list(mean)))
+  
+  v_fold_res <- rownames_to_column(as.data.frame(v_true_m), var = "Compound") %>%
+    dplyr::rename(ConditionT = V1) %>%
+    left_join(rownames_to_column(as.data.frame(v_false_m), var = "Compound")) %>%
+    dplyr::rename(ConditionF = V1) %>%
+    mutate(FoldChange = ConditionT/ConditionF) %>%
+    mutate(FoldChangeLog2 = log2(FoldChange))
+  
+  comp_list <- colnames(v_true)
+  t_test_res <- tibble()
+  
+  for(c in comp_list) {
+    
+    temp <- data.frame(Label = pull(volcData, !!by), Area = pull(volcData, !!c)) %>%
+      mutate(Area_log = log2(Area)) %>% 
+      mutate_if(is.numeric, function(x) ifelse(is.infinite(x), 0, x))
+    
+    if(t.test_log) {
+      tt <- t.test(Area_log ~ Label, data = temp, paired = paired)
+      t_test_res <- t_test_res %>% rbind(tibble(Compound = {{c}}, P_value = tt$p.value, T_statistic = tt$statistic))
+    }
+    else {
+      tt <- t.test(Area ~ Label, data = temp, paired = paired)
+      t_test_res <- t_test_res %>% rbind(tibble(Compound = {{c}}, P_value = tt$p.value, T_statistic = tt$statistic))
+    }
+  }
+  
+  v_data_res <- v_fold_res %>% 
+    left_join(t_test_res) %>% 
+    mutate(FoldChangeLog2 = log2(FoldChange)) %>%
+    mutate(Q_value = qvalue(P_value)$qvalues) %>%
+    mutate(FDR = qvalue(P_value)$lfdr) 
+  
+  v_data_res
+}
+
+# This function returns p_value (Mann-Whitney) and Fold change per compound
+get_fold_pvalue_mw <- function(eset, by, paired = F) {
+  
+  eset2 <- eset[,eset@phenoData$Group == "Sample"]
+  volcData <- as.data.frame(t(exprs(eset2))) %>%
+    rownames_to_column(var = "Sample") %>%
+    left_join(pData(eset2) %>% select(c(Sample, {{by}}))) 
+  volcData %<>%
+    filter(!is.na(pull(volcData, !!by))) 
+  
+  v_true <- volcData %>% filter(pull(volcData, !!by) == T) %>% select(-c(Sample, {{by}}))
+  v_false <- volcData %>% filter(pull(volcData, !!by) == F) %>% select(-c(Sample, {{by}}))
+  
+  v_true_m <- t(v_true %>% summarise_all(list(mean)))
+  v_false_m <- t(v_false %>% summarise_all(list(mean)))
+  
+  v_fold_res <- rownames_to_column(as.data.frame(v_true_m), var = "Compound") %>%
+    dplyr::rename(ConditionT = V1) %>%
+    left_join(rownames_to_column(as.data.frame(v_false_m), var = "Compound")) %>%
+    dplyr::rename(ConditionF = V1) %>%
+    mutate(FoldChange = ConditionT/ConditionF) %>%
+    mutate(FoldChangeLog2 = log2(FoldChange))
+  
+  comp_list <- colnames(v_true)
+  test_res <- tibble()
+  
+  for(c in comp_list) {
+    temp <- data.frame(Label = pull(volcData, !!by), Area = pull(volcData, !!c))
+    tt <- wilcox.test(Area ~ Label, data = temp, exact =F, paired = paired)
+    test_res <- test_res %>% rbind(tibble(Compound = {{c}}, P_value = tt$p.value))
+  }
+  
+  v_data_res <- v_fold_res %>% 
+    left_join(test_res) %>% 
+    mutate(FoldChangeLog2 = log2(FoldChange)) %>%
+    mutate(Q_value = qvalue(P_value)$qvalues) %>%
+    mutate(FDR = qvalue(P_value)$lfdr) 
+  
+  v_data_res
+}
+
+
+
+
 
 
 
