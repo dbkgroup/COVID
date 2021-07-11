@@ -119,6 +119,66 @@ get_pca_by_custom <- function(eset, group_filter, by, labels = F, title = as.cha
   p1
 }
 
+# Volcano plot, expects p-values and fold change info
+# use_q_value: if True q-values will be used, if False p-values will be used
+get_volcano_plot <- function(data_fold_pvalue, x_max = NA, add_lables = T, foldChange_lable_lim = 0.5, p_value_lable_lim = 0.05, use_q_value = T) {
+  
+  y_label <- expression(-log[10]("P_value"))
+  data_fold_pvalue_clean <- data_fold_pvalue
+  if(use_q_value) {
+    data_fold_pvalue_clean %<>% mutate(P_value = Q_value)
+    y_label <- expression(-log[10]("Q_value"))
+  }
+  
+  data_fold_pvalue_clean %<>% filter(is.finite(FoldChangeLog2) & !is.na(FoldChangeLog2) & is.finite(P_value) & !is.na(P_value))
+  
+  data_fold_pvalue_clean$Up_or_Down = case_when(
+    (data_fold_pvalue_clean$P_value <=0.05 & data_fold_pvalue_clean$FoldChangeLog2 >= 0.5) ~ "U",
+    (data_fold_pvalue_clean$P_value <= 0.05 & data_fold_pvalue_clean$FoldChangeLog2  <= -0.5) ~ "D",
+    (data_fold_pvalue_clean$P_value >= 0.05 | data_fold_pvalue_clean$FoldChangeLog2  <= 0.5) ~ "NC",
+    TRUE ~ as.character(NA))
+  
+  p <- ggplot(data_fold_pvalue_clean, aes(x = FoldChangeLog2, y = -log10(P_value), color = Up_or_Down)) +
+    geom_point() +
+    xlab(expression(log[2]("Fold Change"))) + ylab(y_label) +
+    
+    scale_colour_manual(values=c("blue", "grey","red"),name=" ",breaks=c("D", "NC", "U"),labels=c("Down", "No Change", "Up")) +
+    geom_vline(
+      xintercept = c(-0.5,0.5),
+      col = "red",
+      linetype = "dotted",
+      size = 1) +
+    geom_hline(
+      yintercept = c(-log10(0.01),-log10(0.05)),
+      col = "red",
+      linetype = "dotted",
+      size = 1)+
+    theme_bw() +
+    theme(legend.position = "none")+
+    theme_pubr()+
+    theme(panel.grid.minor = element_line(colour = "black", linetype = "dotted")) +
+    theme(panel.grid.major = element_line(colour = "black", linetype = "dotted")) +
+    theme(panel.background = element_rect(colour = "black")) +
+    theme(axis.title.x = element_text( face="bold",size=16)) +
+    theme(axis.title.y = element_text(face="bold",size=16)) +
+    theme(axis.text.x=element_text(face="bold",colour='black', size=14)) +
+    theme(axis.text.y=element_text(face="bold",colour='black', size=14))
+  
+  if(add_lables) {
+    p <- p +
+      geom_text_repel(data=subset(data_fold_pvalue_clean,abs(FoldChangeLog2) >= foldChange_lable_lim & P_value < p_value_lable_lim),
+                      aes(FoldChangeLog2, -log10(P_value), label = Compound),size = 3, fontface = "bold", color="steelblue")
+  }
+  
+  if(!is.na(x_max)) {
+    p <- p +
+      scale_x_continuous(limits = c(-x_max, x_max))
+  }
+  p
+}
+
+
+
 
 
 
