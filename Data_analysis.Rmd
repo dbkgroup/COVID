@@ -334,6 +334,48 @@ getBoxPlotForCompound(data_neg_filter, comp, y_log = T, "Deceased", subtitle = s
 ```
 
 
+Compounds curation step is taking place at this point. Looking at the union of the individually significant compounds (checkComp_s_pos, checkComp_d_pos, checkComp_s_neg, checkComp_d_neg) in Compound discoverer to select compounds that have good signal (LC chormatogram, isotopic pattern and preferential abducts). The subset of curated compounds is imported back for the continuation of the analysis. 
+
+
+```{r}
+significant_curated_pos_526 <- read_csv("Data/DiscoveryStudyB2-B5_Pos_curated_526.csv", guess_max = 8000)  
+significant_curated_neg_409 <- read_csv("Data/DiscoveryStudyB2-B5_Neg_curated_409.csv", guess_max = 8000)
+
+significant_curated_pos_526 %<>% 
+  mutate(MW = significant_curated_pos_526$`Molecular Weight`) %>%
+  mutate(RT = significant_curated_pos_526$`RT [min]`) %>%
+  mutate(Compound = paste(MW, RT, sep = "_"))
+sub_set_526 <- significant_curated_pos_526$Compound
+
+significant_curated_neg_409 %<>% 
+  mutate(MW = significant_curated_neg_409$`Molecular Weight`) %>%
+  mutate(RT = significant_curated_neg_409$`RT [min]`) %>%
+  mutate(Compound = paste(MW, RT, sep = "_"))
+sub_set_409 <- significant_curated_neg_409$Compound
+```
+
+
+## Export for metaboAnalyst- Mummichog
+A MUMMICHOG run in Metaboalalyst has been performed here to check pathway correlations 
+The following code exports the significant and curated compounds into a format suitable for MUMMICHOG
+Please note that we export the monoisotopic mass as M+H ions therefore only M+H abducts should be selected in MUMMICHOG
+
+Feel free to extend to other ESI group and labels, if you extend to ESI- please adapt the m/z calculation to M-H ions
+```{r}
+sub_set_curated_s_pos <- checkComp_s_pos %>% filter(Compound %in% sub_set_526) %>% 
+  select(c(Compound, Q_value)) %>% 
+  dplyr::rename(p.value = Q_value) %>%
+  separate(Compound, into = c("MW", "RT"), sep = "_") %>%
+  mutate(m.z = as.numeric(MW) + 1.007276) %>% # -1.007276 for ESI-
+  select(m.z, p.value) 
+
+write.csv(sub_set_curated_s_pos, file = "DiscoveryStudy_B2-B5_curated_MetaboAnalyst_mummichog_severity_filter_526.csv")
+
+```
+
+
+
+
 
 
 
