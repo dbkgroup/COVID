@@ -1,0 +1,192 @@
+---
+title: "COVID discovery study"
+---
+
+
+```{r}
+#library(reshape2)
+library(formattable)
+#library(gridExtra)
+library(tidyverse)
+library(magrittr)
+#library(Biobase)
+#library(lubridate)
+#library(glue)
+source("Data_prep.R")
+source("Data_viz.R")
+source("Data_processing.R")
+```
+
+
+
+Loading Thermo's Compound Discoverer (CD) processed data
+
+DiscoveryStudyB2-B5_pos.csv : hold exported results from Compound Discoverer (Thermo) ESI+ mode
+DiscoveryStudyB2-B5_neg.csv : hold exported results from Compound Discoverer (Thermo) ESI- mode
+
+DisciveryStudy_RunOrder.csv : acquisition sequence order - important for data normalization, the sequence was the same in ESI+ and ESI-
+
+B2-B5_sample_mapping.csv : hold the information on sample mapping between hospital sample ID (important to relate to metadata) and LC-MS run ID (important to relate to acquired data)
+
+! Remove dat aof birth !!!
+COVID_all_metadata.csv : metadata associated to samples and patients 
+
+
+```{r Load data, message=FALSE, include=FALSE}
+data_pos <- read_csv("Data/DiscoveryStudyB2-B5_pos.csv", guess_max = 8000)
+data_neg <- read_csv("Data/DiscoveryStudyB2-B5_neg.csv", guess_max = 8000)
+data_order <- read_csv("Data/DisciveryStudy_RunOrder.csv", guess_max = 8000)
+data_info <- read_csv("Data/B2-B5_sample_mapping.csv")
+data_info_all <- read_csv("Data/COVID_all_metadata.csv")
+
+data_info_plus <- data_order %>%
+  drop_na() %>%
+  separate(Sample, c("Condition", "Study", "Batch", "Sample"), sep = "_") %>%
+  select(-c("Study", "Condition")) %>%
+  left_join(data_info) 
+
+
+# the ESI+ B2_SQA75 was forgotten from the in the pre-processing therefore mission to avoid error in the following code this sample is removed. 
+data_pos_info_all <- data_info_plus %>% 
+  filter(!(Batch == "B2" & Sample == "SQA75")) %>%
+  left_join(data_info_all, by = "SampleID")
+
+
+
+# The ESI- B4_GBX was actually named GB1 in the data pre-processing step and therefore it is renamed here to avoid conflicts in later code.
+data_neg_info_all <- data_info_plus %>% 
+  left_join(data_info_all, by = "SampleID") 
+
+data_neg_info_all$Sample <- ifelse(data_neg_info_all$Batch == "B4" & data_neg_info_all$Sample == "GBX", "GB1", data_neg_info_all$Sample)
+
+```
+
+```{r Create area eset}
+#eset_CD_area_pos <- covid_transform_to_eset(data_pos, data_pos_info_all %>% filter(Sample != "SQA75" | Batch != "B2") , normalized_areas = F, background = F, normalized = T)
+
+eset_CD_area_pos <- covid_transform_to_eset(data_pos, data_pos_info_all, normalized_areas = F, background = F, normalized = T)
+
+eset_CD_area_neg <- covid_transform_to_eset(data_neg, data_neg_info_all, normalized_areas = F, background = F, normalized = T)
+```
+
+```{r echo=FALSE}
+formattable(get_basic_stats(get_compound_info_short_list(data_pos), "ESI+"), align =c("l","c"), 
+            list(`Criteria` = formatter(
+              "span", style = ~ style(color = "grey",font.weight = "bold"))))
+```
+
+```{r echo=FALSE}
+formattable(get_basic_stats(get_compound_info_short_list(data_neg), "ESI-"), align =c("l","c"), 
+            list(`Criteria` = formatter(
+              "span", style = ~ style(color = "grey",font.weight = "bold"))))
+```
+
+
+PCA plot visualization of the raw areas by batch and group in ESI+ and ESI-
+The data shows relatively little variation by batch but significant time drift in the QC
+
+```{r}
+p1_a <- get_pca_by_batch(eset_CD_area_pos, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI+ by batch", title_center = F)
+p2_a <- get_pca_by_group(eset_CD_area_pos, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI+ by group", title_center = F)
+
+p3_a <- get_pca_by_batch(eset_CD_area_neg, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI- by batch", title_center = F)
+p4_a <- get_pca_by_group(eset_CD_area_neg, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI- by group", title_center = F)
+
+gridExtra::grid.arrange(p1_a, p2_a, nrow = 1, ncol=2, respect = T, padding = unit(1, "mm"), top = textGrob("PCA for all injections ESI+", gp=gpar(fontfamily = "sans", fontsize=15,font=2)), widths = unit(c(93,95), c("mm", "mm")))
+
+gridExtra::grid.arrange(p3_a, p4_a, nrow = 1, ncol=2, respect = T, padding = unit(1, "mm"), top = textGrob("PCA for all injections ESI-", gp=gpar(fontfamily = "sans", fontsize=15,font=2)), widths = unit(c(93,95), c("mm", "mm")))
+```
+
+Test the time drift QC based normalization on a compound in ESI+
+```{r}
+test_set <- eset_CD_area_pos[eset_CD_area_pos@featureData$Compound == "165.07877_2.583",]
+eset_test_norm1 <- covid_normalize_by_batch_plot_correction(test_set)
+
+```
+
+Test the time drift QC based normalization on a compound in ESI-
+```{r}
+test_set <- eset_CD_area_neg[eset_CD_area_neg@featureData$Compound == "264.11096_5.361",]
+eset_test_norm1 <- covid_normalize_by_batch_plot_correction(test_set)
+
+```
+
+Normalize the ESI+ data for QC based time drift per batch (each batch separately)
+This part can take a lot of time
+
+```{r Whitin batch normalization}
+t_start <- Sys.time()
+eset_norm1_pos <- covid_normalize_by_batch(eset_CD_area_pos)
+Sys.time() - t_start
+```
+
+Normalize the ESI+ data for QC based time drift per batch (each batch separately)
+This part can take a lot of time
+```{r Whitin batch normalization}
+t_start <- Sys.time()
+eset_norm1_neg <- covid_normalize_by_batch(eset_CD_area_neg)
+Sys.time() - t_start
+```
+
+
+Check on QC based time drift correction 
+```{r}
+p1_a <- get_pca_by_batch(eset_norm1_pos, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI+ by batch", title_center = F)
+p2_a <- get_pca_by_group(eset_norm1_pos, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI+ by group", title_center = F)
+
+p3_a <- get_pca_by_batch(eset_norm1_neg, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI- by batch", title_center = F)
+p4_a <- get_pca_by_group(eset_norm1_neg, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI- by group", title_center = F)
+
+gridExtra::grid.arrange(p1_a, p2_a, nrow = 1, ncol=2, respect = T, padding = unit(1, "mm"), top = textGrob("PCA for all injections ESI+", gp=gpar(fontfamily = "sans", fontsize=15,font=2)), widths = unit(c(93,95), c("mm", "mm")))
+
+gridExtra::grid.arrange(p3_a, p4_a, nrow = 1, ncol=2, respect = T, padding = unit(1, "mm"), top = textGrob("PCA for all injections ESI-", gp=gpar(fontfamily = "sans", fontsize=15,font=2)), widths = unit(c(93,95), c("mm", "mm")))
+```
+
+
+Normalize between batches ESI+
+```{r Between batch normalization}
+source("Data_processing.R")
+t_start <- Sys.time()
+eset_norm2_pos <- covid_normalize_between_batches(eset_norm1_pos)
+Sys.time() - t_start   
+```
+
+
+
+Normalize between batches ESI-
+```{r Between batch normalization}
+source("Data_processing.R")
+t_start <- Sys.time()
+eset_norm2_neg <- covid_normalize_between_batches(eset_norm1_neg)
+Sys.time() - t_start   
+```
+
+
+
+Check on data after both normalizations  
+```{r}
+p1_a <- get_pca_by_batch(eset_norm2_pos, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI+ by batch", title_center = F)
+p2_a <- get_pca_by_group(eset_norm2_pos, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI+ by group", title_center = F)
+
+p3_a <- get_pca_by_batch(eset_norm2_neg, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI- by batch", title_center = F)
+p4_a <- get_pca_by_group(eset_norm2_neg, c("QC", "Sample", "IQA", "SQA"), labels = F, title = "ESI- by group", title_center = F)
+
+gridExtra::grid.arrange(p1_a, p2_a, nrow = 1, ncol=2, respect = T, padding = unit(1, "mm"), top = textGrob("PCA for all injections ESI+", gp=gpar(fontfamily = "sans", fontsize=15,font=2)), widths = unit(c(93,95), c("mm", "mm")))
+
+gridExtra::grid.arrange(p3_a, p4_a, nrow = 1, ncol=2, respect = T, padding = unit(1, "mm"), top = textGrob("PCA for all injections ESI-", gp=gpar(fontfamily = "sans", fontsize=15,font=2)), widths = unit(c(93,95), c("mm", "mm")))
+```
+
+
+As normalization is time consuming activity I like to save the results so I can restart on later dates form here
+```{r Save / Load normalized data sets}
+save(eset_norm2_pos, file = "Data/Norm2_eset_pos.RData")
+
+load(file = "Data/Norm2_eset_pos.RData")
+```
+
+```{r Save / Load normalized data sets}
+save(eset_norm2_neg, file = "Data/Norm2_eset_neg.RData")
+
+load(file = "Data/Norm2_eset_neg.RData")
+```
+
