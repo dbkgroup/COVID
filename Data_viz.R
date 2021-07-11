@@ -177,7 +177,41 @@ get_volcano_plot <- function(data_fold_pvalue, x_max = NA, add_lables = T, foldC
   p
 }
 
-
+# Visulaize a compound in boxplot fashion
+# eset: Expressionset
+# compound: compound ID m/z_RT example "174.11151_0.679" for Arginine
+# by: boxplot x axis , must be a column name present in eset@phenoData
+# filter_na: if True remove NA in 'by' column if False NAs will apear as a box in the plot
+# y_log: if True - log transform areas
+getBoxPlotForCompound <- function(eset, compound, by, filter_na = T, subtitle = "", y_log = F) {
+  
+  eset2 <- eset[,eset@phenoData$Group == "Sample"]
+  eset2 <- eset2[eset2@featureData$Compound == compound,]
+  
+  df <- as.data.frame(t(exprs(eset2))) %>%
+    dplyr::rename(Area := {{compound}}) %>%
+    rownames_to_column(var = "Sample") %>%
+    left_join(pData(eset2) %>% select(c(Sample, {{by}}))) %>%
+    dplyr::rename(Label := {{by}}) 
+  
+  if(filter_na) 
+    df %<>% filter(!is.na(Label))
+  
+  
+  gg <- ggplot(data = df, aes(x = Label, y = Area)) +
+    geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) +
+    ggtitle(paste(compound, eset2@featureData$Name), subtitle = subtitle) +
+    labs(x = by) + 
+    theme_pubr(base=9, base_family = "sans", border = F) +
+    theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5),  axis.text = element_text(color = "gray20", size = 8))
+  
+  if(y_log) {
+    gg <- gg + 
+      scale_y_log10() +
+      labs(y = "Area (log10 scaled)")
+  }
+  gg
+}
 
 
 
