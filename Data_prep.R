@@ -201,6 +201,25 @@ covid_transform_to_eset <- function(compounds_data, sample_info, normalized_area
 }
 
 
+# This function remove compounds that reach 'tresh' percentage missing in the subgoup of samples defined by group_filter (usually QC samples)
+# group_filter: subgoup(s) of samples to be used for the cut_off (usually QC)
+# tresh: threshold of tolerance for missing detection percentage (usually 0.2 -> 80% present or 20% missing) 
 
+remove_compounds <- function(eset, group_filter, tresh) {
+  
+  eset_filter <- eset[,eset@phenoData$Group %in% group_filter]
+  
+  df <- data.frame(exprs(eset_filter)) %>% rownames_to_column(var = "Compound") %>%
+    na_if(0) 
+  df %<>% mutate(Absent = apply(is.na(df), 1, sum)) %>%
+    select(c(Compound, Absent))
+  
+  count_tresh <- (length(colnames(exprs(eset_filter)))-2)*tresh
+  df_retain <- df %>% filter(Absent < count_tresh)
+  qc_retain_list <- df_retain$Compound
+  
+  eset2 <- eset[eset@featureData$Compound %in% df_retain$Compound,]
+  return(eset2)
+}
 
 
