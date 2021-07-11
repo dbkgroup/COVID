@@ -4,17 +4,14 @@ title: "COVID discovery study"
 
 
 ```{r}
-#library(reshape2)
 library(formattable)
-#library(gridExtra)
 library(tidyverse)
 library(magrittr)
-#library(Biobase)
-#library(lubridate)
 library(glue)
 source("Data_prep.R")
 source("Data_viz.R")
 source("Data_processing.R")
+source("Models_toolbox.R")
 ```
 
 
@@ -374,6 +371,380 @@ write.csv(sub_set_curated_s_pos, file = "DiscoveryStudy_B2-B5_curated_MetaboAnal
 ```
 
 
+# Models building
+
+The following compounds were retained based on contribution to pathways or other known biological function 
+
+## Compounds selection
+Pyrimidines
+ESI+
+111.0431_0.919 dCytidine 
+112.02713_1.081 Uracil
+132.05334_0.844 Ureidopropionate
+
+ESI-
+244.06957_0.858 Pseudouridine 
+244.06964_1.091 Uridine 
+
+Kynurenine pathway
+ESI+
+208.08465_2.257  L-Kynurenine
+204.08968_4.606 L-Tryptophan
+362.20899_8.08 Cortisol 
+122.04786_1.06 Nicotinamide
+180.05336_4.775 Unknown (initially tought to be Nicotinuric acid)
+
+ESI-
+189.04276_5.294  Kynurenate
+
+Acylcarnitines ESI+
+
+Others ESI+
+
+187.16826_0.684	N(1)-acetylspermidine
+174.11151_0.679	DL-Arginine
+384.12137_1.347	S-Adenosylhomocysteine
+113.05879_0.728	Creatinine
+
+```{r}
+pyrimidine_pos <- c("111.0431_0.919", "112.02713_1.081" , "132.05334_0.844") 
+pyrimidine_neg <- c("244.06957_0.858", "244.06964_1.091")
+
+kynurenine_pos <- c("208.08465_2.257", "204.08968_4.606", "362.20899_8.08", "122.04786_1.06", "180.05336_4.775")
+kynurenine_neg <- c("189.04276_5.294")
+
+carnitines <- c("217.13131_1.629", "231.14698_4.286", "247.14186_1.208", "259.17833_6.403", "287.20948_7.961")
+
+other_compounds_pos <- c("187.16826_0.684", "174.11151_0.679", "384.12137_1.347", "113.05879_0.728")
+
+# 20 compounds model
+selection_pos <- c(pyrimidine_pos, kynurenine_pos, carnitines, other_compounds_pos)
+selection_neg <- c(pyrimidine_neg, kynurenine_neg)
+
+#All curated compounds
+curated_pos <- significant_curated_pos_526 %>% pull(Compound)
+curated_neg <- significant_curated_neg_409 %>% pull(Compound)
+```
+
+
+## Preparing data for model building 
+ESI+ and ESI- data will be merged
+Separation in training and test sets 
+Data will be scaled
+Two labels will be retained for now LabelS (severity) LabelD (outcome)
+Weights will be calculated (as the data is imbalanced especially in outcome)
+
+The model data is cut to the 20 compounds model (selection_pos, selection_neg). To run model creation on different number of compounds please replace those in the following code with a different compounds selection. Per example curated_pos and curated_neg for the total of curated data (935 compounds)
+
+```{r Data prep2}
+pure_data <- data.frame()
+
+data_pos <- t(exprs(data_pos_filter)) %>% as.data.frame() %>% 
+  select(all_of(selection_pos)) %>%
+  rownames_to_column(var = "Sample") %>%
+  left_join(pData(data_pos_filter) %>% select(c(Sample, Deceased, Severity, Group))) %>% 
+  filter(Group == "Sample" & !grepl("AA", Sample, fixed=TRUE)) %>% # do not take replicates (Sample names containing 'AA') as they don't have severity matched
+  select(-Group) 
+
+data_neg <- t(exprs(data_neg_filter)) %>% as.data.frame() %>% 
+  select(all_of(selection_neg)) %>%
+  rownames_to_column(var = "Sample") %>%
+  left_join(pData(data_pos_filter) %>% select(c(Sample, Deceased, Severity, Group))) %>% 
+  filter(Group == "Sample" & !grepl("AA", Sample, fixed=TRUE)) %>% # do not take replicates (Sample names containing 'AA') as they don't have severity matched
+  select(-c(Group, Deceased, Severity))
+  
+pure_data <-  data_pos %>% left_join(data_neg, by = "Sample") %>%
+  mutate(LabelD = Deceased) %>%
+  mutate(LabelS = if_else(Severity=="Severe", T, F)) %>%
+  select(-c(Deceased, Severity))  %>%
+  drop_na() 
+
+pure_data_z <- pure_data %>% mutate_if(is.numeric, scale)
+
+set.seed(585)
+train_rows <- get_train_rows2(pure_data_z, 0.8, "LabelS", "LabelD")
+
+pure_data_train <- pure_data_z[train_rows,]
+pure_data_test <- pure_data_z[-train_rows,]
+data_out <- as.matrix(pure_data_train %>% select(-c(LabelD, LabelS)))
+
+#Calculate weights
+N_neg_D <- pure_data_train %>% filter(LabelD==F) %>% nrow
+N_pos_D <- pure_data_train %>% filter(LabelD==T) %>% nrow
+N_neg_S <- pure_data_train %>% filter(LabelS==F) %>% nrow
+N_pos_S <- pure_data_train %>% filter(LabelS==T) %>% nrow
+
+pos_weight_out_D = N_neg_D/N_pos_D
+pos_weight_out_S = N_neg_S/N_pos_S
+
+pos_weight_test_out = (pure_data_test %>% filter(LabelD==F) %>% nrow)/(pure_data_test %>% filter(LabelD==T) %>% nrow)
+pos_weight_test_sev = (pure_data_test %>% filter(LabelS==F) %>% nrow)/(pure_data_test %>% filter(LabelS==T) %>% nrow)
+
+weight_out <- ifelse(pure_data_train$LabelD, N_neg_D/(N_neg_D+N_pos_D), N_pos_D/(N_neg_D+N_pos_D))
+weight_sev <- ifelse(pure_data_train$LabelS, N_neg_S/(N_neg_S+N_pos_S), N_pos_S/(N_neg_S+N_pos_S))
+```
+
+The following model building code will be ran multiple times (to adapt on different labels i.e., severity or outcome)
+
+Choose Severity or Outcome by commenting / commenting the lines at the start of the next code chunk
+```{r}
+by <- "Severity"
+#by <- "Outcome"
+
+if(by == "Severity") {
+  pure_data <- pure_data_z %>%
+    mutate(Label = LabelS)
+  pure_data_train <- pure_data_train %>%
+    mutate(Label = LabelS) 
+  pure_data_test <- pure_data_test %>%
+    mutate(Label = LabelS)
+  weight <- weight_sev
+} else{
+  pure_data <- pure_data_z %>%
+    mutate(Label = LabelD)
+  pure_data_train <- pure_data_train %>%
+    mutate(Label = LabelD) 
+  pure_data_test <- pure_data_test %>%
+    mutate(Label = LabelD) 
+  weight <- weight_out
+}
+
+pure_data <- pure_data %>%
+  select(-c(LabelD, LabelS, Sample))
+pure_data_train <- pure_data_train %>%
+  select(-c(LabelD, LabelS, Sample))
+pure_data_test <- pure_data_test %>%
+  select(-c(LabelD, LabelS, Sample))
+
+data_train_m <- as.matrix(pure_data_train %>% select(-Label))
+
+
+#pure_data_sev_z <- pure_data
+pure_data_out_z <- pure_data
+```
+
+
+```{r}
+library(rstanarm)
+library(yardstick)
+library(pROC)
+library(xgboost)
+library(DiagrammeR)
+library(glmnet)
+```
+
+
+## R stan arm model
+
+Need to select a subset - very lengthly 
+Can use unscaled data - will be scaled by the stanarm glm
+
+Use of weights provides better results in outcome as the data is unbalanced
+```{r Rstanarm}
+
+set.seed(502)
+
+options(mc.cores = parallel::detectCores())
+t_start <- Sys.time()
+sglm_r <- stan_glm(Label ~ ., family = binomial(), data = pure_data_train, prior = normal(scale = 1))#, weights = weight)
+Sys.time() - t_start   
+
+build_metrics_stan<-function(data) {
+  res <- posterior_predict(sglm_r, newdata = (data %>% select(-Label)))
+  res_mean <- apply(res, MARGIN = 2, mean)
+  
+  #prior <- N_neg/(N_neg+N_pos)
+  prior <- 0.5
+  #prior <- N_neg / N_pos
+  levels <- c(T,F)
+  data.frame(pred = res_mean,
+             truth = factor(data$Label, levels=levels),
+             pred_class = factor(res_mean>prior, levels=levels)) #%>%
+    #rename(pred = X1)
+}
+
+train_metrics <- build_metrics_stan(pure_data_train)
+train_metrics %>% conf_mat(truth, pred_class) 
+train_metrics %>% roc_curve(truth,pred) %>% autoplot()
+train_metrics %>% conf_mat(truth,pred_class) %>% summary
+
+test_metrics <- build_metrics_stan(pure_data_test) 
+test_metrics %>% conf_mat(truth,pred_class) 
+test_metrics %>% roc_auc(truth, pred)
+test_metrics %>% roc_curve(truth,pred) %>% autoplot()
+test_metrics %>% conf_mat(truth,pred_class) %>% summary
+
+get_roc_interval <- function(data) {
+  
+  roc_res <- data.frame()
+  
+  for(i in 1:500) {
+    res <- posterior_predict(sglm, newdata = (data %>% select(-Label)))
+    res_mean <- apply(res, MARGIN = 2, mean)
+    
+    prior <- 0.5
+    levels <- c(T,F)
+    data_pred <- data.frame(pred = res_mean,
+             truth = factor(data$Label, levels=levels),
+             pred_class = factor(res_mean>prior, levels=levels))
+    
+    roc <- roc(truth ~ pred, data = data_pred)
+    roc_res <- roc_res %>% rbind(pROC::coords(roc, x = seq(from = 0, to = 1, by = 0.05)))
+  }
+  roc_res
+}
+
+
+par(pty="s")
+roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F, 
+                  main="ROC with confidence intervals for stan glm",
+            ci=TRUE, boot.n=2000, plot=TRUE)
+
+sens.ci <- ci.se(roc1, specificities=seq(0, 100, 5))
+plot(sens.ci, type="shape", col="lightblue")
+
+
+par(pty="m")
+roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F, 
+                  main="ROC with confidence intervals for stan glm",
+            ci=TRUE, boot.n=2000, plot=TRUE, print.auc=T)
+
+
+loo1 <- loo( sglm_r, cores = 1)
+plot(loo1)
+```
+
+Monte-Carlo test on the model 
+
+```{r}
+source("Models_toolbox.R")
+get_mc_stan_accuracy(100, pure_data)
+```
+
+
+## XGboost model
+
+```{r xg boost Cross Validate}
+set.seed(153)
+params_tree <- list(objective = "binary:logistic", booster="gbtree", eta = 0.01, max_depth = 2)#, scale_pos_weight= pos_weight_out)
+params_lin  <- list(objective = "binary:logistic", booster="gblinear")#, lambda=0.2, scale_pos_weight=N_neg/N_pos)
+
+pure_data_train_m <- pure_data_train %>% select(-Label) %>% as.matrix()
+params <- params_tree
+
+xg_cv <- xgb.cv(params = params, data = pure_data_train_m, 
+             label = pure_data_train$Label,
+             nfold = 5, nrounds = 1000)
+
+
+xg_cv$evaluation_log %>% ggplot() + 
+  geom_point(aes(x = iter, y = train_logloss_mean), color = "red") + 
+  geom_point(aes(x = iter, y = test_logloss_mean), color = "green")
+
+```
+
+Select the nrounds based on the evaluation plot in previous chunk
+```{r xg boost Train}
+
+set.seed(153)
+
+xg <- xgboost(params = params, data = pure_data_train_m, 
+             label = pure_data_train$Label,
+             nrounds = 200)
+
+build_metrics_xg<-function(data) {
+  pred <- predict(xg,newdata = as.matrix(data %>% select(-Label)))
+  #prior <- N_neg/(N_neg+N_pos)
+  prior <- 0.5
+  levels <- c(T,F)
+  data.frame(pred=pred, 
+             truth=factor(data$Label, levels=levels),
+             pred_class=factor(pred>prior, levels=levels))
+}
+
+train_metrics <- build_metrics_xg(pure_data_train)
+train_metrics %>% conf_mat(truth,pred_class) 
+train_metrics %>% roc_curve(truth,pred) %>% autoplot()
+train_metrics %>% conf_mat(truth,pred_class) %>% summary
+
+test_metrics <- build_metrics_xg(pure_data_test)
+test_metrics %>% conf_mat(truth,pred_class) 
+test_metrics %>% roc_auc(truth, pred)
+test_metrics %>% roc_curve(truth,pred) %>% autoplot()
+test_metrics %>% conf_mat(truth,pred_class) %>% summary
+
+importance<-xgb.importance(model=xg)
+xgb.plot.importance(importance, rel_to_first = T)
+
+par(pty="s")
+roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F, 
+                  main="ROC with confidence intervals for xgboost",
+            ci=TRUE, boot.n=2000 , ci.alpha=0.5, plot=TRUE)
+
+sens.ci <- ci.se(roc1, specificities=seq(0, 100, 5))
+plot(sens.ci, type="shape", col="lightblue")
+
+
+par(pty="m")
+roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F, 
+                  main="ROC with confidence intervals for xgboost",
+            ci=TRUE, boot.n=2000, plot=TRUE, print.auc=T)
+
+
+xgb.plot.tree(model = xg, trees = 0, show_node_id = TRUE)
+```
+
+
+## Elasticnet model 
+
+
+```{r elastic train}
+set.seed(542)
+glmnet1<-cv.glmnet(x=as.matrix(pure_data_train %>% select(-Label)),
+                   y=pure_data_train$Label,
+                   nfolds = 5,
+                   family = "binomial",
+                   #lambda = seq(from = 0.1, to = 20, by =0.1),
+                   #weights = weight, 
+                   alpha = 0.1)
+plot(glmnet1)
+
+build_metrics_elastic<-function(data) {
+  res <- predict(glmnet1,newx=as.matrix(data %>% select(-Label)),type="response")
+  prior <- 0.5
+  levels <- c(T,F)
+  data.frame(pred = res[,1],
+             truth = factor(data$Label, levels=levels),
+             pred_class = factor(res>prior, levels=levels)) 
+}
+
+train_metrics <- build_metrics_elastic(pure_data_train)
+train_metrics %>% conf_mat(truth, pred_class) 
+train_metrics %>% roc_curve(truth,pred) %>% autoplot()
+train_metrics %>% conf_mat(truth,pred_class) %>% summary
+
+test_metrics <- build_metrics_elastic(pure_data_test)
+test_metrics %>% conf_mat(truth,pred_class) 
+test_metrics %>% roc_curve(truth,pred) %>% autoplot()
+test_metrics %>% roc_auc(truth, pred)
+test_metrics %>% conf_mat(truth,pred_class) %>% summary
+
+par(pty="s")
+roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F, 
+                  main="ROC with confidence intervals for glmnet",
+            ci=TRUE, boot.n=2000, plot=TRUE)
+
+sens.ci <- ci.se(roc1, specificities=seq(0, 100, 5))
+plot(sens.ci, type="shape", col="lightblue")
+#plot(sens.ci, type="bars")
+
+par(pty="m")
+roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F, 
+                  main="ROC with confidence intervals for glmnet",
+            ci=TRUE, boot.n=2000, plot=TRUE, print.auc=T)
+
+sens.ci <- ci.se(roc1, specificities=seq(0, 100, 5))
+```
 
 
 
