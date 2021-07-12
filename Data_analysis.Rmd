@@ -442,8 +442,10 @@ pure_data <- data.frame()
 data_pos <- t(exprs(data_pos_filter)) %>% as.data.frame() %>% 
   select(all_of(selection_pos)) %>%
   rownames_to_column(var = "Sample") %>%
-  left_join(pData(data_pos_filter) %>% select(c(Sample, Deceased, Severity, Group))) %>% 
+  left_join(pData(data_pos_filter) %>% select(c(Sample, Deceased, Severity, Group, Sex))) %>% 
   filter(Group == "Sample" & !grepl("AA", Sample, fixed=TRUE)) %>% # do not take replicates (Sample names containing 'AA') as they don't have severity matched
+  mutate(Sex = as.factor(Sex)) %>%
+  select(-Sex) %>% #if one whan't to keep sex as a predicitor comment this line
   select(-Group) 
 
 data_neg <- t(exprs(data_neg_filter)) %>% as.data.frame() %>% 
@@ -613,6 +615,14 @@ roc1 <- pROC::roc(truth ~ pred, test_metrics, percent=T, smooth = F,
 loo1 <- loo( sglm_r, cores = 1)
 plot(loo1)
 ```
+
+Run this chunk to visualize the model in browser 
+The browser needs to be closed in order to continue
+```{r}
+launch_shinystan(sglm_r)
+```
+
+
 
 Monte-Carlo test on the model 
 
