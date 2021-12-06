@@ -165,3 +165,47 @@ get_compound_logistic_reg <- function(eset, condition, compound, corrected_for =
   return (data.frame("Compound" = compound, "OR(97.5%CI)" = 0, "P_value" =  0, "P_value val" = 0))
 }
 
+get_compound_stan_logistic_reg <- function(eset, condition, compound, corrected_for = c()) {
+  
+  set.seed(4569)
+  eset <- eset[eset@featureData$Compound == compound,]
+  
+  p_retain <- append(corrected_for, c("Sample", {{condition}}))
+  df <- as.data.frame(t(exprs(eset))) %>%
+    dplyr::rename(Area := {{compound}}) %>%
+    rownames_to_column(var = "Sample") %>%
+    left_join(pData(eset) %>% select(p_retain)) %>%
+    dplyr::rename(Condition := {{condition}}) %>% 
+    drop_na()
+  
+  df_z <- df %>% mutate_if(is.numeric, scale) %>%
+    mutate_if(is.character, factor)
+  
+  if(length(corrected_for) > 0)
+    fmla_t <- "Condition ~ 0 + Area"
+  else
+    fmla_t <- "Condition~Area"
+  for(c in corrected_for) {
+    fmla_t <- paste(fmla_t, "+", c, sep = " ")
+  }
+  fmla <- as.formula(fmla_t)
+  
+  logit_model<-stan_glm(fmla,data=df_z,family=binomial(link='logit'))
+  
+    if(length(corrected_for) > 0) {
+      or_res <- exp(coef(logit_model))[[1]]
+      ci_res <- exp(posterior_interval(logit_model, prob = 0.95))
+      ci_2_5 <- ci_res[1, '2.5%']
+      ci_97_5 <- ci_res[1, '97.5%']
+      
+    }
+    else{
+      or_res <- exp(coef(logit_model))[[2]]
+      ci_res <- exp(posterior_interval(logit_model, prob = 0.95))
+      ci_2_5 <- ci_res[2, '2.5%']
+      ci_97_5 <- ci_res[2, '97.5%']
+      
+    }
+    return (data.frame("Compound" = compound, "OR_97.5CI" = paste(format(or_res, digits = 2), " (", format(ci_2_5, digits = 2), "-", format(ci_97_5, digits = 2), ")", sep = "")))
+  
+}
